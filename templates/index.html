@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>智能数据工程知识库</title>
+  <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .search-container {
+      max-width: 800px;
+      margin: 2rem auto;
+      position: relative;
+    }
+
+    #autocomplete {
+      position: absolute;
+      width: 100%;
+      z-index: 1000;
+      max-height: 300px;
+      overflow-y: auto;
+      opacity: 0;
+      transform: translateY(-10px);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+
+    #autocomplete.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    #result-section {
+      margin-top: 2rem;
+    }
+
+    .keyword-highlight {
+      color: #0d6efd;
+      font-weight: bold;
+    }
+
+    .main-container {
+      display: flex;
+      gap: 2rem;
+      padding: 20px;
+    }
+
+    .sidebar {
+      width: 320px;
+      min-width: 320px;
+      position: sticky;
+      top: 20px;
+      height: calc(100vh - 40px);
+    }
+
+    .main-content {
+      flex-grow: 1;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    @media (max-width: 992px) {
+      .main-container {
+        flex-direction: column;
+      }
+
+      .sidebar {
+        width: 100%;
+        height: 400px;
+        position: static;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="alert-container"
+    class="alert alert-warning alert-dismissible fade show position-fixed top-0 start-50 translate-middle-x mt-3"
+    role="alert" style="display: none;">
+    <span id="alert-message"></span>
+    <button type="button" class="btn-close" onclick="dismissAlert()"></button>
+  </div>
+  <div class="main-container">
+    <div class="sidebar">
+      <div id="wordcloudChart" style="width: 100%; height: 80vh;"></div>
+    </div>
+    <div class="main-content">
+      <div class="container search-container">
+        <h2 class="mb-4">智能数据工程知识库查询</h2>
+        <div class="input-group">
+          <input type="text" class="form-control" id="searchInput" placeholder="输入技术关键词...">
+          <button class="btn btn-primary" onclick="performSearch()">搜索</button>
+        </div>
+        <div id="autocomplete" class="list-group mt-2"></div>
+
+        <div id="result-section">
+          <div class="card">
+            <div class="card-body">
+              <h4 id="keyword" class="card-title"></h4>
+              <h6 type="text" class="text-muted mt-3">技术简介</h6>
+              <p id="summary" class="card-text"></p>
+              <h6 type="text" class="text-muted mt-3">技术详解</h6>
+              <p id="detail" class="card-text "></p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <script src="https://cdn.bootcdn.net/ajax/libs/jquery/3.6.0/jquery.min.js">;
+
+        // 初始化词云图表
+        function initWordCloud() {
+          const chartDom = document.getElementById('wordcloudChart');
+          const myChart = echarts.init(chartDom);
+
+          fetch('/wordcloud')
+            .then(response => response.json())
+            .then(data => {
+              const option = {
+                series: [{
+                  type: 'wordCloud',
+                  shape: 'circle',
+                  sizeRange: [20, 60],
+                  rotationRange: [0, 0],
+                  gridSize: 10,
+                  drawOutOfBound: false,
+                  textStyle: {
+                    color: function () {
+                      return 'rgb(' + [
+                        Math.round(Math.random() * 160 + 95),
+                        Math.round(Math.random() * 160 + 95),
+                        Math.round(Math.random() * 160 + 95)
+                      ].join(',') + ')';
+                    }
+                  },
+                  emphasis: {
+                    focus: 'self',
+                    textStyle: {
+                      shadowBlur: 10,
+                      shadowColor: '#333'
+                    }
+                  },
+                  data: data.map(item => ({
+                    name: item.name,
+                    value: item.value,
+                    textStyle: {
+                      fontSize: Math.log(item.value + 1) * 10 + 12
+                    }
+                  }))
+                }]
+              };
+              myChart.setOption(option);
+            });
+        }
+
+        // 页面加载完成后初始化词云
+        $(document).ready(function () {
+          initWordCloud();
+        });
+      </script>
+      <script>
+        let searchDebounce;
+        const $autocomplete = $('#autocomplete');
+
+        // 统一输入处理
+        $('#searchInput').on('input', function (e) {
+          clearTimeout(searchDebounce);
+          searchDebounce = setTimeout(() => {
+            const keyword = $(this).val().trim();
+
+            if (keyword.length > 0) {
+              // 同时获取搜索建议和搜索结果
+              Promise.all([
+                fetch(`/suggest?q=${encodeURIComponent(keyword)}`),
+                fetch(`/search?q=${encodeURIComponent(keyword)}`)
+              ])
+                .then(responses => Promise.all(responses.map(r => r.json())))
+                .then(([suggestions, result]) => {
+                  // 处理搜索建议
+                  if (suggestions.length) {
+                    $autocomplete.html(
+                      suggestions.map(item =>
+                        `<a class="list-group-item list-group-item-action" 
+                     onmousedown="event.preventDefault();" 
+                     onclick="selectSuggestion('${item}')">
+                    ${item}
+                   </a>`
+                      ).join('')
+                    ).addClass('show');
+                  } else {
+                    $autocomplete.removeClass('show');
+                  }
+                });
+            } else {
+              $autocomplete.removeClass('show');
+            }
+          }, 200);
+        });
+
+
+        function selectKeyword(keyword) {
+          $('#searchInput').val(keyword);
+          $('#autocomplete').empty();
+          performSearch();
+          $('#searchInput').trigger('focus');
+        }
+
+        function showAlert(message) {
+          $('#alert-message').text(message);
+          $('#alert-container').fadeIn();
+          setTimeout(() => {
+            $('#alert-container').fadeOut();
+            $('#searchInput').val('');
+            $('#keyword').html('');
+            $('#summary').html('');
+            $('#detail').html('');
+          }, 3000);
+        }
+
+        function dismissAlert() {
+          $('#alert-container').fadeOut();
+          $('#searchInput').val('');
+          $('#keword').html('');
+          $('#summary').html('');
+          $('#detail').html('');
+
+        }
+
+        function performSearch() {
+          const $input = $('#searchInput');
+          const keyword = $input.val().trim();
+
+          if (!keyword) {
+            showAlert('请输入搜索关键词');
+            return;
+          }
+
+          fetch(`/search?q=${encodeURIComponent(keyword)}`)
+            .then(response => response.json())
+            .then(data => {
+              // 搜索完成后重新聚焦并触发输入事件
+              $input.trigger('focus').trigger('input');
+              if (data.error === 'not_found') {
+                showAlert('暂未找到相关技术资料，请尝试其他关键词');
+                return;
+              }
+              if (!data?.keyword) {
+                showAlert('未找到有效数据');
+                return;
+              }
+              {
+                $('#keyword').html(data.keyword.replace(new RegExp(keyword, 'gi'), match =>
+                  `<span class="keyword-highlight">${match}</span>`));
+                $('#summary').html(data.summary.replace(new RegExp(keyword, 'gi'), match =>
+                  `<span class="keyword-highlight">${match}</span>`));
+                $('#detail').html(data.detail.replace(new RegExp(keyword, 'gi'), match =>
+                  `<span class="keyword-highlight">${match}</span>`));
+              }
+            });
+          $(this).trigger('input');
+        }
+
+
+        function selectSuggestion(keyword) {
+          $('#searchInput').val(keyword).trigger('focus');
+          $autocomplete.removeClass('show');
+          performSearch();
+          $('#searchInput').trigger('focus');
+        }
+
+
+        // 初始化词云图表
+        function initWordCloud() {
+          const chartDom = document.getElementById('wordcloudChart');
+          const myChart = echarts.init(chartDom);
+
+          fetch('/wordcloud')
+            .then(response => response.json())
+            .then(data => {
+              const option = {
+                series: [{
+                  type: 'wordCloud',
+                  shape: 'circle',
+                  sizeRange: [20, 60],
+                  rotationRange: [0, 0],
+                  gridSize: 10,
+                  drawOutOfBound: false,
+                  textStyle: {
+                    color: function () {
+                      return 'rgb(' + [
+                        Math.round(Math.random() * 160 + 95),
+                        Math.round(Math.random() * 160 + 95),
+                        Math.round(Math.random() * 160 + 95)
+                      ].join(',') + ')';
+                    }
+                  },
+                  emphasis: {
+                    focus: 'self',
+                    textStyle: {
+                      shadowBlur: 10,
+                      shadowColor: '#333'
+                    }
+                  },
+                  data: data.map(item => ({
+                    name: item.name,
+                    value: item.value,
+                    textStyle: {
+                      fontSize: Math.log(item.value + 1) * 10 + 12
+                    }
+                  }))
+                }]
+              };
+              myChart.setOption(option);
+            });
+        }
+
+        // 页面加载完成后初始化词云
+        $(document).ready(function () {
+          initWordCloud();
+        });
+      </script>
+    </div>
+  </div>
+</body>
+
+</html>
